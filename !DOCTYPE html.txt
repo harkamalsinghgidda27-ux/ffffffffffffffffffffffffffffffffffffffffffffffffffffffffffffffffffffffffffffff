@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Hologram Robot</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #000; }
+  canvas { display: block; }
+  #controls { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); color: white; font-family: sans-serif; }
+  #status { margin-top: 5px; }
+</style>
+</head>
+<body>
+
+<canvas id="holoCanvas"></canvas>
+<div id="controls">
+  <button id="voiceBtn">🎤 Speak</button>
+  <div id="status">Idle</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+let scene, camera, renderer, robot, robotHand;
+let video, mouthOpen = 0;
+
+// Initialize Scene
+async function init() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 1.5, 3);
+
+    renderer = new THREE.WebGLRenderer({canvas: document.getElementById('holoCanvas'), alpha: true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const light = new THREE.AmbientLight(0xffffff, 1);
+    scene.add(light);
+
+    // Load 3D Robot
+    const loader = new THREE.GLTFLoader();
+    loader.load('https://models.babylonjs.com/RobotExpressive/RobotExpressive.glb', (gltf)=>{
+        robot = gltf.scene;
+        robot.scale.set(1.5,1.5,1.5);
+        scene.add(robot);
+        robotHand = robot.getObjectByName("RightHand");
+    });
+
+    // Webcam
+    video = document.createElement('video');
+    video.autoplay = true;
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    video.srcObject = stream;
+
+    // Load Face API
+    await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js/weights');
+    await faceapi.nets.faceLandmark68TinyNet.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js/weights');
+
+    // MediaPipe Hands
+    const hands = new Hands({locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.5});
+    hands.onResults(onHandResults);
+    const cameraFeed = new Camera(video, {onFrame: async ()=>{ await hands.send({image: video}) }, width:640, height:480});
+    cameraFeed.start();
+
+    animate();
+}
+
+// Hand gestures
+function onHandResults(results){
+    if(results.multiHandLandmarks.length>0 && robotHand){
+        const landmarks = results.multiHandLandmarks[0];
+        const tipY = landmarks[8].y;
+        const mcpY = landmarks[5].y;
+        if(tipY < mcpY) robotHand.rotation.z = Math.sin(Date.now()*0.01)*0.5; // wave
+    }
+}
+
+// Animate Scene
+async function animate(){
+    requestAnimationFrame(animate);
+
+    if(robot){
+        robot.rotation.y += 0.005;
+
+        if(video.readyState >= 2){
+            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
+            if(detection){
+                const noseX = detection.landmarks.getNose()[0].x;
+                const centerX = video.videoWidth/2;
+                robot.rotation.y = ((noseX - centerX)/video.videoWidth)*1.0;
+
+                const topLip = detection.landmarks.getMouth()[13];
+                const bottomLip = detection.landmarks.getMouth()[19];
+                mouthOpen = (bottomLip.y - topLip.y)/10;
+            }
+        }
+
+        robot.scale.y = 1.5 + mouthOpen*0.5;
+    }
+
+    renderer.render(scene, camera);
+}
+
+// Voice input
+document.getElementById('voiceBtn').addEventListener('click', ()=>{
+    const status = document.getElementById('status');
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = 'en-US';
+    recognition.start();
+    status.textContent = 'Listening...';
+
+    recognition.onresult = (event)=>{
+        const userText = event.results[0][0].transcript;
+        status.textContent = 'You: ' + userText;
+
+        // Dummy AI response
+        const aiText = "Hello! I am your hologram robot. You said: " + userText;
+
+        const utter = new SpeechSynthesisUtterance(aiText);
+        speechSynthesis.speak(utter);
+        utter.onstart = ()=>{ mouthOpen = 0.5; }
+        utter.onend = ()=>{ mouthOpen = 0; }
+
+        status.textContent = 'AI: ' + aiText;
+    };
+
+    recognition.onerror = err => { status.textContent = 'Error: ' + err.message; }
+});
+
+init();
+</script>
+
+</body>
+</html>
